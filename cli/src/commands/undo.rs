@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures::StreamExt as _;
 use itertools::Itertools as _;
 use jj_lib::object_id::ObjectId as _;
 use jj_lib::op_store::OperationId;
@@ -118,7 +119,13 @@ pub async fn cmd_undo(
         writeln!(ui.hint_default(), "To avoid this, run `jj redo` now.")?;
     }
 
-    let mut op_to_restore = match op_to_undo.parents().at_most_one() {
+    let mut op_to_restore = match op_to_undo
+        .parents()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .at_most_one()
+    {
         Ok(Some(parent_of_op_to_undo)) => parent_of_op_to_undo?,
         Ok(None) => return Err(user_error("Cannot undo root operation")),
         Err(_) => {

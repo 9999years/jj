@@ -15,6 +15,7 @@
 use std::slice;
 
 use assert_matches::assert_matches;
+use futures::StreamExt as _;
 use itertools::Itertools as _;
 use jj_lib::backend::CommitId;
 use jj_lib::commit::Commit;
@@ -152,6 +153,9 @@ fn test_walk_predecessors_concurrent_ops() {
         .operation()
         .parents()
         .map(Result::unwrap)
+        .collect::<Vec<_>>()
+        .block_on()
+        .into_iter()
         .collect_array()
         .unwrap();
 

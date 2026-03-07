@@ -27,6 +27,7 @@ use futures::future::ready;
 use futures::future::try_join_all;
 use futures::stream;
 use itertools::Itertools as _;
+use pollster::FutureExt as _;
 use thiserror::Error;
 
 use crate::dag_walk;
@@ -161,7 +162,7 @@ async fn resolve_single_op(
     }?;
     for (i, c) in op_postfix.chars().enumerate() {
         let mut neighbor_ops = match c {
-            '-' => operation.parents().try_collect()?,
+            '-' => operation.parents().try_collect().await?,
             '+' => find_child_ops(head_ops.as_ref().unwrap(), operation.id()).await?,
             _ => unreachable!(),
         };
@@ -276,7 +277,12 @@ pub fn walk_ancestors(
     stream::iter(dag_walk::topo_order_reverse_lazy_ok(
         head_ops.into_iter().map(Ok),
         |OperationByEndTime(op)| op.id().clone(),
-        |OperationByEndTime(op)| op.parents().map_ok(OperationByEndTime).collect_vec(),
+        |OperationByEndTime(op)| {
+            op.parents()
+                .map_ok(OperationByEndTime)
+                .collect::<Vec<_>>()
+                .block_on()
+        },
         |_| panic!("graph has cycle"),
     ))
     .map_ok(|OperationByEndTime(op)| op)
@@ -306,7 +312,12 @@ pub fn walk_ancestors_range(
     let trailing_iter = dag_walk::topo_order_reverse_lazy_ok(
         start_ops.into_iter().map(Ok),
         |OperationByEndTime(op)| op.id().clone(),
-        |OperationByEndTime(op)| op.parents().map_ok(OperationByEndTime).collect_vec(),
+        |OperationByEndTime(op)| {
+            op.parents()
+                .map_ok(OperationByEndTime)
+                .collect::<Vec<_>>()
+                .block_on()
+        },
         |_| panic!("graph has cycle"),
     )
     .map_ok(|OperationByEndTime(op)| op);
@@ -320,7 +331,12 @@ fn collect_ancestors_until_roots(
     let sorted_ops = match dag_walk::topo_order_reverse_chunked(
         start_ops,
         |OperationByEndTime(op)| op.id().clone(),
-        |OperationByEndTime(op)| op.parents().map_ok(OperationByEndTime).collect_vec(),
+        |OperationByEndTime(op)| {
+            op.parents()
+                .map_ok(OperationByEndTime)
+                .collect::<Vec<_>>()
+                .block_on()
+        },
         |_| panic!("graph has cycle"),
     ) {
         Ok(sorted_ops) => sorted_ops,

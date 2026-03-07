@@ -16,9 +16,9 @@ use std::slice;
 
 use clap_complete::ArgValueCandidates;
 use futures::StreamExt as _;
+use futures::TryStreamExt as _;
 use futures::stream;
 use futures::stream::BoxStream;
-use itertools::Itertools as _;
 use jj_lib::graph::GraphEdge;
 use jj_lib::graph::reverse_graph;
 use jj_lib::op_store::OpStoreError;
@@ -160,7 +160,7 @@ async fn do_op_log(
                                formatter: &mut dyn Formatter,
                                op: &Operation,
                                with_content_format: &LogContentFormat| {
-            let parent_ops: Vec<_> = op.parents().try_collect()?;
+            let parent_ops: Vec<_> = op.parents().try_collect().await?;
             let merged_parent_op = repo_loader
                 .merge_operations(parent_ops.clone(), None)
                 .await?;

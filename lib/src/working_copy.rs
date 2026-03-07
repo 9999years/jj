@@ -22,7 +22,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use itertools::Itertools as _;
+use futures::StreamExt as _;
+use pollster::FutureExt;
 use thiserror::Error;
 use tracing::instrument;
 
@@ -378,7 +379,7 @@ impl WorkingCopyFreshness {
                 [Ok(wc_operation.clone())],
                 [Ok(repo_operation.clone())],
                 |op: &Operation| op.id().clone(),
-                |op: &Operation| op.parents().collect_vec(),
+                |op: &Operation| op.parents().collect::<Vec<_>>().block_on(),
             )?
             .expect("unrelated operations");
             if ancestor_op.id() == repo_operation.id() {
