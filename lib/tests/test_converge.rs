@@ -891,7 +891,7 @@ fn test_automatic_converge_description_parent_and_trees() -> Result<(), Box<dyn 
     //  =  P - F^ + F   -  C3^ + C3  - F  + F^ -  C4^ + C4  - F  + F^
     //  =  X - X  + C1  -   X  + C3  - C1 + X  -  X   + C4  - C1 + X
     //  =  C3 - C1 + C4
-    // where P is the solution parent(s) and F is the evolution fork point.
+    // where P is the solution parent(s) and F is the converge base (for trees).
     let expected_tree = create_merged_tree(vec![
         (
             // ADD
@@ -902,7 +902,7 @@ fn test_automatic_converge_description_parent_and_trees() -> Result<(), Box<dyn 
             // REMOVE
             evolution_fork_point_parent.tree().clone(),
             format!(
-                "evolution fork point parent(s): {}",
+                "converge base parent(s): {}",
                 evolution_fork_point.parents_conflict_label().block_on()?
             ),
         ),
@@ -910,7 +910,7 @@ fn test_automatic_converge_description_parent_and_trees() -> Result<(), Box<dyn 
             // ADD
             evolution_fork_point.tree().clone(),
             format!(
-                "evolution fork point: {}",
+                "converge base: tree of {} rebased onto parents",
                 evolution_fork_point.conflict_label()
             ),
         ),
@@ -925,13 +925,16 @@ fn test_automatic_converge_description_parent_and_trees() -> Result<(), Box<dyn 
         (
             // ADD C3
             commit3.tree().clone(),
-            format!("divergent commit: {}", commit3.conflict_label()),
+            format!(
+                "divergent commit: {} (rebased on top of parents)",
+                commit3.conflict_label()
+            ),
         ),
         (
             // REMOVE
             evolution_fork_point.tree().clone(),
             format!(
-                "evolution fork point: {}",
+                "converge base: tree of {} rebased onto parents",
                 evolution_fork_point.conflict_label()
             ),
         ),
@@ -939,7 +942,7 @@ fn test_automatic_converge_description_parent_and_trees() -> Result<(), Box<dyn 
             // ADD
             evolution_fork_point_parent.tree().clone(),
             format!(
-                "evolution fork point parent(s): {}",
+                "converge base parent(s): {}",
                 evolution_fork_point.parents_conflict_label().block_on()?
             ),
         ),
@@ -954,13 +957,16 @@ fn test_automatic_converge_description_parent_and_trees() -> Result<(), Box<dyn 
         (
             // ADD C4
             commit4.tree().clone(),
-            format!("divergent commit: {}", commit4.conflict_label()),
+            format!(
+                "divergent commit: {} (rebased on top of parents)",
+                commit4.conflict_label()
+            ),
         ),
         (
             // REMOVE
             evolution_fork_point.tree().clone(),
             format!(
-                "evolution fork point: {}",
+                "converge base: tree of {} rebased onto parents",
                 evolution_fork_point.conflict_label()
             ),
         ),
@@ -968,7 +974,7 @@ fn test_automatic_converge_description_parent_and_trees() -> Result<(), Box<dyn 
             // ADD
             evolution_fork_point_parent.tree().clone(),
             format!(
-                "evolution fork point parent(s): {}",
+                "converge base parent(s): {}",
                 evolution_fork_point.parents_conflict_label().block_on()?
             ),
         ),
@@ -1018,7 +1024,7 @@ fn test_automatic_converge_description_parent_and_trees() -> Result<(), Box<dyn 
             ],
         ),
     );
-    // TODO
+    // TODO: verify the op log.
 
     Ok(())
 }
