@@ -507,6 +507,23 @@ where
         }
         Self { adj }
     }
+
+    /// Returns a new graph with the same nodes as this graph and all edges
+    /// reversed.
+    pub fn reverse(&self) -> Self {
+        let mut rev_adj: IndexMap<N, IndexSet<N>> = IndexMap::new();
+        for (parent, children) in &self.adj {
+            // Ensure parent is in rev_adj even if it has no children.
+            rev_adj.entry(parent.clone()).or_default();
+            for child in children {
+                rev_adj
+                    .entry(child.clone())
+                    .or_default()
+                    .insert(parent.clone());
+            }
+        }
+        Self { adj: rev_adj }
+    }
 }
 
 /// A FlowGraph is a directed graph with a designated start node.

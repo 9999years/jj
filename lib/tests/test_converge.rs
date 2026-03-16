@@ -478,29 +478,29 @@ fn test_build_truncated_evolution_graph() -> Result<(), Box<dyn std::error::Erro
         truncated_evolution_graph.commits[commit3.id()].commit.id(),
         commit3.id()
     );
-    assert!(
+    assert_eq!(
         truncated_evolution_graph
             .graph
             .adjacent_nodes(commit1.id())
             .unwrap()
-            .next()
-            .is_none()
+            .collect::<Vec<_>>(),
+        &[commit2.id(), commit3.id()]
     );
-    assert_eq!(
+    assert!(
         truncated_evolution_graph
             .graph
             .adjacent_nodes(commit2.id())
             .unwrap()
-            .collect::<Vec<_>>(),
-        &[commit1.id()]
+            .collect::<Vec<_>>()
+            .is_empty(),
     );
-    assert_eq!(
+    assert!(
         truncated_evolution_graph
             .graph
             .adjacent_nodes(commit3.id())
             .unwrap()
-            .collect::<Vec<_>>(),
-        &[commit1.id()]
+            .collect::<Vec<_>>()
+            .is_empty(),
     );
 
     Ok(())

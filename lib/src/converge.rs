@@ -43,7 +43,7 @@ use jj_lib::graph_dominators::FlowGraph;
 use jj_lib::graph_dominators::FlowGraphError;
 use jj_lib::graph_dominators::SimpleDirectedGraph;
 use jj_lib::graph_dominators::ValueFlowGraph;
-use jj_lib::graph_dominators::find_closest_common_post_dominator;
+use jj_lib::graph_dominators::find_closest_common_dominator;
 use jj_lib::merge::Merge;
 use jj_lib::merge::MergeBuilder;
 use jj_lib::merge::SameChange;
@@ -325,9 +325,10 @@ pub struct TruncatedEvolutionGraph {
     /// The commits in the change that are being converged (typically the
     /// visible & mutable commits for the given change-id).
     pub divergent_commit_ids: Vec<CommitId>,
-    /// The evolution graph, with edges from commit X to those predecessors of X
-    /// that have the same change-id as the commit. The graph is not necessarily
-    /// a tree (commits may have multiple predecessors).
+    /// The evolution graph, with edges X->Y if commit X is a predecessor of
+    /// commit Y and both X and Y have the same divergent change-id. The
+    /// graph is not necessarily a tree (commits may have multiple
+    /// predecessors).
     pub graph: SimpleDirectedGraph<CommitId>,
     /// The evolution entries for the commits in the graph.
     pub commits: HashMap<CommitId, CommitEvolutionEntry>,
@@ -365,7 +366,7 @@ impl TruncatedEvolutionGraph {
             )?;
         }
 
-        // The adjacency list, with commits pointing to their predecessor.
+        // The adjacency list, with commits pointing to their predecessors.
         let mut adj: IndexMap<CommitId, IndexSet<CommitId>> = IndexMap::new();
         let mut commits = HashMap::new();
         let evolution_nodes = walk_predecessors(repo, divergent_commit_ids.as_slice());
@@ -377,11 +378,12 @@ impl TruncatedEvolutionGraph {
 
         for node in evolution_nodes {
             let entry = node?;
+            let commit_id = entry.commit.id();
             if *entry.commit.change_id() != divergent_change_id {
                 // Skip commits with unrelated change ids.
                 continue;
             }
-            if adj.contains_key(entry.commit.id()) {
+            if commits.contains_key(commit_id) {
                 // TODO: think about this some more. Can 2 different operations result in the
                 // same commit? Maybe the key should be (commit-id, operation-id).
 
@@ -401,12 +403,12 @@ impl TruncatedEvolutionGraph {
                     }
                 })
                 .try_collect()?;
-            commits.insert(entry.commit.id().clone(), entry.clone());
-            adj.entry(entry.commit.id().clone())
+            commits.insert(commit_id.clone(), entry.clone());
+            adj.entry(commit_id.clone())
                 .or_default()
                 .extend(predecessors.iter().cloned());
             if predecessors.is_empty() {
-                initial_nodes.push(entry.commit.id().clone());
+                initial_nodes.push(commit_id.clone());
             }
             if commits.len() >= max_evolution_nodes {
                 initial_nodes.extend(predecessors);
@@ -437,9 +439,16 @@ impl TruncatedEvolutionGraph {
             }
         }
 
-        let graph = SimpleDirectedGraph::new(adj);
+        let graph = SimpleDirectedGraph::new(adj).reverse();
         let evolution_fork_point =
             Self::compute_evolution_fork_point(&divergent_commit_ids, &graph)?;
+
+        // Remove irrelevant commits.
+        let graph = FlowGraph::new(graph, evolution_fork_point.clone())?
+            .trim(&divergent_commit_ids)
+            .graph;
+        commits.retain(|commit_id, _| graph.contains_node(commit_id));
+
         Ok(Self {
             divergent_commit_ids,
             graph,
@@ -484,7 +493,7 @@ impl TruncatedEvolutionGraph {
         // guaranteed to exist (although it could happen to be the virtual
         // initial node).
         let dominator =
-            find_closest_common_post_dominator(graph.nodes(), graph.edges(), divergent_commit_ids);
+            find_closest_common_dominator(graph.nodes(), graph.edges(), divergent_commit_ids);
         match dominator {
             Ok(Some(dominator)) => Ok(dominator.clone()),
             Ok(None) => {
@@ -674,7 +683,7 @@ async fn converge_trees(
     })?
     .find_dominator_value(
         &truncated_evolution_graph.divergent_commit_ids,
-        EdgeDirection::Reverse,
+        EdgeDirection::Forward,
     )?
     .unwrap();
     let dominator_producers = rebased_resolved_tree_ids
@@ -772,7 +781,7 @@ where
     let value_fn = |commit_id: &CommitId| value_fn(graph.get_commit(commit_id)?);
     let flow_graph = FlowGraph::new(graph.graph.clone(), graph.evolution_fork_point.clone())?;
     let dominator_value = ValueFlowGraph::new(&flow_graph, &value_fn)?
-        .find_dominator_value(&graph.divergent_commit_ids, EdgeDirection::Reverse)?;
+        .find_dominator_value(&graph.divergent_commit_ids, EdgeDirection::Forward)?;
     Ok(dominator_value)
 }
 
