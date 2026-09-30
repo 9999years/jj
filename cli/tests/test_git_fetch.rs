@@ -2654,3 +2654,159 @@ fn test_git_fetch_auto_track_bookmarks() {
     [EOF]
     ");
 }
+
+/// Reproduces visible change divergence when fetch and concurrent status
+/// independently rebase a local commit after a remote bookmark moves backwards.
+/// Serial execution and disabled abandonment serve as controls.
+#[test_case::test_case(false; "serial")]
+#[test_case::test_case(true; "concurrent_status")]
+fn test_git_fetch_does_not_create_divergent_changes(concurrent_status: bool) -> TestResult {
+    let mut test_env = TestEnvironment::default();
+    test_env.add_env_var("GIT_ALLOW_PROTOCOL", "file");
+    test_env.add_config("remotes.origin.auto-track-bookmarks = '*'");
+    test_env.add_config(format!("git.abandon-unreachable-commits = true"));
+    let (origin, a) = init_origin_with_two_commits(&test_env);
+
+    test_env
+        .run_jj_in(".", ["git", "init", "--colocate", "client"])
+        .success();
+    let client = test_env.work_dir("client");
+    client
+        .run_jj(["git", "remote", "add", "origin", "../origin"])
+        .success();
+    client.run_jj(["git", "fetch"]).success();
+    // D is an unbookmarked local child of B. Keep Git HEAD away from B so
+    // importing the remote's backwards move can abandon B and rebase D.
+    client.run_jj(["new", "main", "-m", "D"]).success();
+    client.run_jj(["new", "root()"]).success();
+    origin
+        .run_jj(["bookmark", "set", "main", "-r", &a, "--allow-backwards"])
+        .success();
+
+    insta::allow_duplicates! {
+        insta::assert_snapshot!(client.run_jj(["log", "-r", "all()"]).success(), @"
+        @  znkkpsqq test.user@example.com 2001-02-03 08:05:16 2b2f7cb0
+        │  (empty) (no description set)
+        │ ○  yostqsxw test.user@example.com 2001-02-03 08:05:15 a7b26c53
+        │ │  (empty) D
+        │ ◆  rlvkpnrz test.user@example.com 2001-02-03 08:05:10 main fa6ce34b
+        │ │  (empty) B
+        │ ◆  qpvuntsm test.user@example.com 2001-02-03 08:05:08 8777db25
+        ├─╯  (empty) A
+        ◆  zzzzzzzz root() 00000000
+        [EOF]
+        ");
+    }
+
+    if concurrent_status {
+        fetch_with_concurrent_status(&test_env, &client)?;
+    } else {
+        client.run_jj(["git", "fetch"]).success();
+    }
+    // This ordinary log resolves concurrent operations and exposes divergence.
+    let output = client.run_jj(["log", "-r", "all()"]).success();
+    if concurrent_status {
+        // TODO: Fetch and status should not create two visible versions of D.
+        insta::assert_snapshot!(output, @"
+        @  znkkpsqq test.user@example.com 2001-02-03 08:05:16 2b2f7cb0
+        │  (empty) (no description set)
+        │ ○  yostqsxw/0 test.user@example.com 2001-02-03 08:05:20 1abaea81 (divergent)
+        │ │  (empty) D
+        │ │ ○  yostqsxw/1 test.user@example.com 2001-02-03 08:05:19 4e6ae0c8 (divergent)
+        │ ├─╯  (empty) D
+        │ ◆  qpvuntsm test.user@example.com 2001-02-03 08:05:08 main 8777db25
+        ├─╯  (empty) A
+        ◆  zzzzzzzz root() 00000000
+        [EOF]
+        ------- stderr -------
+        Concurrent modification detected, resolving automatically.
+        [EOF]
+        ");
+    } else {
+        insta::assert_snapshot!(output, @"
+        @  znkkpsqq test.user@example.com 2001-02-03 08:05:16 2b2f7cb0
+        │  (empty) (no description set)
+        │ ○  yostqsxw test.user@example.com 2001-02-03 08:05:19 4e6ae0c8
+        │ │  (empty) D
+        │ ◆  qpvuntsm test.user@example.com 2001-02-03 08:05:08 main 8777db25
+        ├─╯  (empty) A
+        ◆  zzzzzzzz root() 00000000
+        [EOF]
+        ");
+    }
+    Ok(())
+}
+
+/// Creates A -> B with main at B, returning origin and A's commit ID.
+fn init_origin_with_two_commits(test_env: &TestEnvironment) -> (TestWorkDir<'_>, String) {
+    test_env
+        .run_jj_in(".", ["git", "init", "--colocate", "origin"])
+        .success();
+    let origin = test_env.work_dir("origin");
+    origin.run_jj(["commit", "-m", "A"]).success();
+    let a = origin
+        .run_jj(["log", "--no-graph", "-r", "@-", "-T", "commit_id"])
+        .success()
+        .stdout
+        .into_raw();
+    origin.run_jj(["commit", "-m", "B"]).success();
+    origin
+        .run_jj(["bookmark", "create", "main", "-r", "@-"])
+        .success();
+    (origin, a)
+}
+
+/// Pauses fetch after Git updates refs, then runs `status` in the same workspace.
+/// The pause is bounded so a fix that blocks status during fetch won't deadlock.
+fn fetch_with_concurrent_status(test_env: &TestEnvironment, client: &TestWorkDir) -> TestResult {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let ready = test_env.env_root().join("fetch-ready");
+    let resume = test_env.env_root().join("fetch-resume");
+    // Pause after the Git subprocess fetches origin, before jj imports its refs.
+    // Marker files are outside the working copy.
+    let wrapper = assert_cmd::cargo::cargo_bin!("fake-git");
+    assert!(wrapper.is_file());
+    let mut fetch = test_env.new_jj_cmd();
+    fetch
+        .current_dir(client.root())
+        .args(["git", "fetch", "--config"])
+        .arg(format!(
+            "git.executable-path={}",
+            crate::common::to_toml_value(wrapper.to_str().unwrap())
+        ))
+        .env("FAKE_GIT_READY", &ready)
+        .env("FAKE_GIT_RESUME", &resume)
+        .timeout(Duration::from_secs(20));
+    let mut status = test_env.new_jj_cmd();
+    status
+        .current_dir(client.root())
+        .arg("status")
+        .timeout(Duration::from_secs(20));
+
+    std::thread::scope(|scope| -> TestResult {
+        let fetch_thread = scope.spawn(move || fetch.output().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() {
+            assert!(
+                Instant::now() < deadline && !fetch_thread.is_finished(),
+                "fetch did not reach the pause before importing refs"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let (sender, receiver) = mpsc::channel();
+        scope.spawn(move || sender.send(status.output().unwrap()).unwrap());
+        // On affected builds status finishes while fetch is paused. A fix that
+        // locks across fetch may block status; resume fetch after a bounded wait
+        // so that such a fix can also pass this test without deadlocking.
+        let status_output = receiver.recv_timeout(Duration::from_secs(2));
+        std::fs::write(&resume, "")?;
+        let fetch_output = fetch_thread.join().unwrap();
+        let status_output = status_output.unwrap_or_else(|_| receiver.recv().unwrap());
+        assert!(fetch_output.status.success(), "{fetch_output:?}");
+        assert!(status_output.status.success(), "{status_output:?}");
+        Ok(())
+    })
+}
